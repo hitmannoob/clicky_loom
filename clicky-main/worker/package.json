@@ -1,0 +1,13 @@
+{
+  "name": "clicky-proxy",
+  "private": true,
+  "scripts": {
+    "prepare-dev-env": "../scripts/sync-worker-dev-vars.sh",
+    "dev": "wrangler dev",
+    "dev:local": "npm run prepare-dev-env && wrangler dev",
+    "deploy": "wrangler deploy"
+  },
+  "devDependencies": {
+    "wrangler": "^3.0.0"
+  }
+}

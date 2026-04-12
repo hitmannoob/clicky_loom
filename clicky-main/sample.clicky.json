@@ -1,0 +1,72 @@
+{
+  "version": "1.0",
+  "id": "sample-calculator-walkthrough",
+  "title": "Calculator quick tour",
+  "author": {
+    "name": "Clicky sample",
+    "email": null
+  },
+  "created_at": "2026-04-11T00:00:00Z",
+  "context": {
+    "type": "app",
+    "target": "com.apple.calculator",
+    "branch": null,
+    "open_path": null
+  },
+  "voice": null,
+  "steps": [
+    {
+      "id": "step_open_calculator",
+      "narration": "first, open the calculator app from launchpad or spotlight. when it's up, press ctrl plus option to continue.",
+      "ref_image": null,
+      "ref_image_base64": null,
+      "point": null,
+      "advance": {
+        "mode": "manual",
+        "condition": "calculator app is open and visible",
+        "timeout_seconds": null,
+        "stuck_hint": null
+      }
+    },
+    {
+      "id": "step_click_five",
+      "narration": "nice. now tap the five button on the calculator keypad. i'll watch your screen and continue once i see a five appear.",
+      "ref_image": null,
+      "ref_image_base64": null,
+      "point": {
+        "x": 200,
+        "y": 400,
+        "label": "the number 5 button on the calculator keypad",
+        "screen": null
+      },
+      "advance": {
+        "mode": "auto",
+        "condition": "the calculator display shows a single 5",
+        "timeout_seconds": 30,
+        "stuck_hint": "look for the 5 button in the middle row of the calculator keypad, between the 4 and 6 buttons"
+      }
+    },
+    {
+      "id": "step_click_plus",
+      "narration": "great. now tap the plus button on the right side to start an addition. press ctrl plus option when you're done.",
+      "ref_image": null,
+      "ref_image_base64": null,
+      "point": {
+        "x": 340,
+        "y": 400,
+        "label": "the plus button on the right side of the calculator",
+        "screen": null
+      },
+      "advance": {
+        "mode": "manual",
+        "condition": "the plus button has been pressed",
+        "timeout_seconds": null,
+        "stuck_hint": null
+      }
+    }
+  ],
+  "completion": {
+    "narration": "nice work. that's the end of this quick tour — you just experienced a guided walkthrough. pretty cool, right?",
+    "action": null
+  }
+}
