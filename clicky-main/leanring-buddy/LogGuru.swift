@@ -55,7 +55,13 @@ enum LogGuru {
         category: Category = .app,
         privacy: Privacy = .public
     ) {
-        logger(for: category).debug("\(message(), privacy: privacy.osLogPrivacy)")
+        let msg = message()
+        switch privacy {
+        case .public:
+            logger(for: category).debug("\(msg, privacy: .public)")
+        case .private:
+            logger(for: category).debug("\(msg, privacy: .private)")
+        }
     }
 
     static func info(
@@ -63,7 +69,13 @@ enum LogGuru {
         category: Category = .app,
         privacy: Privacy = .public
     ) {
-        logger(for: category).info("\(message(), privacy: privacy.osLogPrivacy)")
+        let msg = message()
+        switch privacy {
+        case .public:
+            logger(for: category).info("\(msg, privacy: .public)")
+        case .private:
+            logger(for: category).info("\(msg, privacy: .private)")
+        }
     }
 
     static func notice(
@@ -71,7 +83,13 @@ enum LogGuru {
         category: Category = .app,
         privacy: Privacy = .public
     ) {
-        logger(for: category).notice("\(message(), privacy: privacy.osLogPrivacy)")
+        let msg = message()
+        switch privacy {
+        case .public:
+            logger(for: category).notice("\(msg, privacy: .public)")
+        case .private:
+            logger(for: category).notice("\(msg, privacy: .private)")
+        }
     }
 
     static func warning(
@@ -79,7 +97,13 @@ enum LogGuru {
         category: Category = .app,
         privacy: Privacy = .public
     ) {
-        logger(for: category).warning("\(message(), privacy: privacy.osLogPrivacy)")
+        let msg = message()
+        switch privacy {
+        case .public:
+            logger(for: category).warning("\(msg, privacy: .public)")
+        case .private:
+            logger(for: category).warning("\(msg, privacy: .private)")
+        }
     }
 
     static func error(
@@ -87,7 +111,13 @@ enum LogGuru {
         category: Category = .app,
         privacy: Privacy = .public
     ) {
-        logger(for: category).error("\(message(), privacy: privacy.osLogPrivacy)")
+        let msg = message()
+        switch privacy {
+        case .public:
+            logger(for: category).error("\(msg, privacy: .public)")
+        case .private:
+            logger(for: category).error("\(msg, privacy: .private)")
+        }
     }
 
     private static func logger(for category: Category) -> Logger {
