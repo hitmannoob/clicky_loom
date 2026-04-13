@@ -816,21 +816,14 @@ private struct GuideUploadQueueRowView: View {
 
             Spacer()
 
-            if case let .completed(_, deepLinkString, shareURLString) = queueEntry.currentStatus {
-                // Prefer the universal https share_url when the worker
-                // returned one (codebase distribution v1+) so the
-                // copied link works for receivers who don't have
-                // Clicky installed yet. Falls back to the clicky://
-                // deep link when the worker is an older build.
-                let linkToCopyForClipboard = shareURLString ?? deepLinkString
-                let copyButtonLabelText = shareURLString != nil ? "Copy link" : "Copy deep link"
+            if case let .completed(savedFileURL, _) = queueEntry.currentStatus {
                 Button(action: {
-                    copyShareLinkToClipboard(linkToCopyForClipboard)
+                    NSWorkspace.shared.activateFileViewerSelecting([savedFileURL])
                 }) {
                     HStack(spacing: 3) {
-                        Image(systemName: "doc.on.doc")
+                        Image(systemName: "folder")
                             .font(.system(size: 9, weight: .medium))
-                        Text(copyButtonLabelText)
+                        Text("Reveal in Finder")
                             .font(.system(size: 10, weight: .medium))
                     }
                     .foregroundColor(DS.Colors.textSecondary)
@@ -854,7 +847,7 @@ private struct GuideUploadQueueRowView: View {
         case .transcribing:      return "waveform"
         case .segmenting:        return "rectangle.split.3x1"
         case .generatingSteps:   return "sparkles"
-        case .uploading:         return "arrow.up.circle"
+        case .saving:            return "arrow.down.doc"
         case .completed:         return "checkmark.circle.fill"
         case .failed:            return "exclamationmark.triangle.fill"
         }
@@ -875,8 +868,8 @@ private struct GuideUploadQueueRowView: View {
         case .segmenting:        return "Segmenting steps…"
         case .generatingSteps(let currentStepNumber, let totalStepCount):
             return "Generating step \(currentStepNumber) of \(totalStepCount)…"
-        case .uploading:         return "Uploading to R2…"
-        case .completed:         return "Ready to share"
+        case .saving:            return "Saving to repo…"
+        case .completed:         return "Saved"
         case .failed(let errorMessage):
             return "Failed: \(errorMessage)"
         }
@@ -887,23 +880,11 @@ private struct GuideUploadQueueRowView: View {
         let frameString = "\(queueEntry.screenshotCount) frames"
 
         switch queueEntry.currentStatus {
-        case .completed(let guideID, _, _):
-            return "\(durationString) · \(frameString) · id \(guideID.prefix(8))"
+        case .completed(let savedFileURL, _):
+            return "\(durationString) · \(frameString) · \(savedFileURL.lastPathComponent)"
         default:
             return "\(durationString) · \(frameString)"
         }
     }
 
-    /// Writes the given link (share URL or deep link — caller picks
-    /// which one to prefer) to the system clipboard so the user can
-    /// paste it into Slack / email / etc.
-    private func copyShareLinkToClipboard(_ linkStringToCopy: String) {
-        NSPasteboard.general.clearContents()
-        NSPasteboard.general.setString(linkStringToCopy, forType: .string)
-        LogGuru.info(
-            "Copied guide share link to clipboard: \(linkStringToCopy)",
-            category: .guided,
-            privacy: .private
-        )
-    }
 }

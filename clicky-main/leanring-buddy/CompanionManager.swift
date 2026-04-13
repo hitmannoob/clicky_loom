@@ -238,13 +238,14 @@ final class CompanionManager: ObservableObject {
             return
         }
 
-        let capturedRepoContext = promptAuthorForWalkthroughFileAndBuildRepoContext(
+        let capturedResult = promptAuthorForWalkthroughFileAndBuildRepoContext(
             editorBundleIdAtRecordStart: finishedRecordingSession.frontmostApplicationBundleIdentifierAtRecordStart
         )
 
         guideUploadQueue.enqueueRecordingSession(
             finishedRecordingSession,
-            withCapturedGuideContext: capturedRepoContext
+            withCapturedGuideContext: capturedResult?.guideContext,
+            repoRootURL: capturedResult?.repoRootURL
         )
     }
 
@@ -260,7 +261,7 @@ final class CompanionManager: ObservableObject {
     /// already looking at the menu bar — a brief modal is natural.
     private func promptAuthorForWalkthroughFileAndBuildRepoContext(
         editorBundleIdAtRecordStart: String?
-    ) -> GuideContext? {
+    ) -> CapturedRepoContextResult? {
         let walkthroughFilePicker = NSOpenPanel()
         walkthroughFilePicker.title = "Pick the file you walked through"
         walkthroughFilePicker.message = "Optional — attach repo context to this walkthrough so receivers can open it in the right repo, branch, and file. Cancel to upload without repo context."
@@ -287,19 +288,19 @@ final class CompanionManager: ObservableObject {
             return nil
         }
 
-        let capturedContext = CodebaseContextCaptureService.captureRepoContext(
+        let capturedResult = CodebaseContextCaptureService.captureRepoContext(
             forPickedFileURL: pickedFileURL,
             editorBundleId: editorBundleIdAtRecordStart
         )
 
-        if capturedContext == nil {
+        if capturedResult == nil {
             LogGuru.warning(
-                "Author picked \(pickedFileURL.path) but it's not inside a git repo — uploading without repo context",
+                "Author picked \(pickedFileURL.path) but it's not inside a git repo — saving without repo context",
                 category: .guided
             )
         }
 
-        return capturedContext
+        return capturedResult
     }
 
     func clearDetectedElementLocation() {

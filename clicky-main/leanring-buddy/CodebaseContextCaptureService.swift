@@ -37,6 +37,14 @@ import Foundation
 /// Builds `GuideContext.repo` values from user-picked files by running
 /// local `git` commands. All methods are pure + throwing — no state,
 /// no background work, no side effects beyond the shell-outs.
+/// Bundles the `GuideContext` with the repo root URL so callers can
+/// both attach repo metadata to the guide *and* know where to save
+/// the `.clicky.json` file on disk.
+struct CapturedRepoContextResult {
+    let guideContext: GuideContext
+    let repoRootURL: URL
+}
+
 enum CodebaseContextCaptureService {
 
     /// Captures the full repo context for a file the author picked
@@ -61,7 +69,7 @@ enum CodebaseContextCaptureService {
     static func captureRepoContext(
         forPickedFileURL pickedFileURL: URL,
         editorBundleId: String?
-    ) -> GuideContext? {
+    ) -> CapturedRepoContextResult? {
         let parentDirectoryURL = pickedFileURL.deletingLastPathComponent()
 
         // Step 1: find the repo root. If this fails the file isn't in
@@ -114,7 +122,7 @@ enum CodebaseContextCaptureService {
             privacy: .private
         )
 
-        return GuideContext(
+        let guideContext = GuideContext(
             type: .repo,
             // Fall back to the repo root's file:// URL if `origin` isn't
             // set — some authors record from a freshly-initialized
@@ -128,6 +136,11 @@ enum CodebaseContextCaptureService {
             editorBundleId: editorBundleId,
             workspaceName: workspaceFolderName,
             clonePreference: inferredClonePreference
+        )
+
+        return CapturedRepoContextResult(
+            guideContext: guideContext,
+            repoRootURL: repoRootURL
         )
     }
 

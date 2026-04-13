@@ -170,11 +170,11 @@ enum ClickyAnalytics {
         ])
     }
 
-    /// A recorded guide finished post-processing and uploaded to R2,
-    /// yielding a shareable `clicky://` deep link.
-    static func trackGuideUploaded(guideID: String, stepCount: Int) {
-        PostHogSDK.shared.capture("guide_uploaded", properties: [
-            "guide_id": guideID,
+    /// A recorded guide finished post-processing and was saved to
+    /// the repo's `.clicky/` directory (or a user-chosen location).
+    static func trackGuideSaved(filePath: String, stepCount: Int) {
+        PostHogSDK.shared.capture("guide_saved", properties: [
+            "file_path": filePath,
             "step_count": stepCount
         ])
     }

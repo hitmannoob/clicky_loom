@@ -2,10 +2,11 @@
 //  GuideUploadQueue.swift
 //  leanring-buddy
 //
-//  Background processing + R2 upload queue for recorded walkthrough
-//  guides. Takes a finished `GuideRecordingSession` from `GuideRecorder`
-//  and turns it into a shareable `clicky://guide?id=...` deep link via
-//  this pipeline:
+//  Background processing queue for recorded walkthrough guides. Takes
+//  a finished `GuideRecordingSession` from `GuideRecorder` and turns
+//  it into a `.clicky.json` file saved inside the repo's `.clicky/`
+//  directory (or a user-chosen location via NSSavePanel when no repo
+//  root is available). Pipeline:
 //
 //      1. Submit the WAV audio to the Worker's
 //         `POST /audio/transcribe/submit` — returns a transcript_id.
@@ -24,24 +25,26 @@
 //         directly so it can pick the right element label.
 //      5. Assemble a full `ClickyGuide` with all the returned steps,
 //         base64-embedding each reference screenshot inline so the
-//         uploaded JSON is self-contained (no separate asset fetches
+//         saved JSON is self-contained (no separate asset fetches
 //         on the playback side).
-//      6. POST the ClickyGuide to `POST /guide/upload` on the Worker,
-//         which stores it in R2 and returns { guide_id, deep_link }.
+//      6. Save the ClickyGuide as pretty-printed JSON to
+//         `<repoRoot>/.clicky/<title>-<id>.clicky.json`.
 //      7. Publish the result so the menu bar panel can show a
-//         "Copy Share Link" button for the new guide.
+//         "Reveal in Finder" button for the saved guide.
 //
 //  The queue processes one entry at a time in FIFO order and is
 //  intentionally simple — no retry logic, no persistence across app
 //  launches. For the prototype the cost of a failed recording is low
 //  (User A can just re-record); reliability can come later. Every
 //  state transition (queued → transcribing → segmenting →
-//  generatingSteps → uploading → completed | failed) is mirrored on
+//  generatingSteps → saving → completed | failed) is mirrored on
 //  `@Published pendingEntries` so the panel shows live progress.
 //
 
+import AppKit
 import Combine
 import Foundation
+import UniformTypeIdentifiers
 
 // MARK: - Queue entry
 
@@ -57,21 +60,14 @@ struct GuideUploadQueueEntry: Identifiable, Equatable {
 
     /// Per-entry status used by the panel to render a status line
     /// (e.g. "transcribing…", "generating step 2 of 4…",
-    /// "ready: https://…/g/…").
-    ///
-    /// `shareURLString` is the universal HTTPS share link returned by
-    /// the Worker's `/guide/upload` (added for codebase distribution
-    /// v1). It's optional so the client still works against older
-    /// worker deploys that only know how to return `deep_link` —
-    /// callers should prefer `shareURLString` when present and fall
-    /// back to `deepLinkString` otherwise.
+    /// "Saved").
     enum Status: Equatable {
         case queued
         case transcribing
         case segmenting
         case generatingSteps(currentStepNumber: Int, totalStepCount: Int)
-        case uploading
-        case completed(guideID: String, deepLinkString: String, shareURLString: String?)
+        case saving
+        case completed(savedFileURL: URL, guideTitle: String)
         case failed(errorMessage: String)
     }
 }
@@ -114,6 +110,12 @@ final class GuideUploadQueue: ObservableObject {
     /// legacy `type:.url, target:"unknown"` default.
     private var capturedContextByEntryID: [UUID: GuideContext] = [:]
 
+    /// Repo root URL captured alongside the guide context. Used to
+    /// write the `.clicky.json` file into the repo's `.clicky/` dir.
+    /// Nil when the author skipped the file picker or picked outside
+    /// a git repo — in that case we show an NSSavePanel instead.
+    private var repoRootURLByEntryID: [UUID: URL] = [:]
+
     // MARK: Init
 
     init(companionManager: CompanionManager) {
@@ -134,7 +136,8 @@ final class GuideUploadQueue: ObservableObject {
     /// pipeline degrades cleanly instead of failing.
     func enqueueRecordingSession(
         _ recordingSession: GuideRecordingSession,
-        withCapturedGuideContext capturedGuideContext: GuideContext? = nil
+        withCapturedGuideContext capturedGuideContext: GuideContext? = nil,
+        repoRootURL: URL? = nil
     ) {
         let newEntry = GuideUploadQueueEntry(
             id: UUID(),
@@ -147,6 +150,9 @@ final class GuideUploadQueue: ObservableObject {
         sessionPayloadByEntryID[newEntry.id] = recordingSession
         if let capturedGuideContext {
             capturedContextByEntryID[newEntry.id] = capturedGuideContext
+        }
+        if let repoRootURL {
+            repoRootURLByEntryID[newEntry.id] = repoRootURL
         }
 
         let contextLogSummary: String = {
@@ -319,13 +325,13 @@ final class GuideUploadQueue: ObservableObject {
             return
         }
 
-        // Phase 4: upload assembled guide to R2 via Worker /guide/upload
-        updateEntryStatus(entryID: entryToProcess.id, newStatus: .uploading)
+        // Phase 4: save assembled guide to local `.clicky/` directory
+        updateEntryStatus(entryID: entryToProcess.id, newStatus: .saving)
 
         // Prefer the repo context captured by the author's post-stop
         // file pick (codebase distribution v1). Falls back to the
         // legacy non-repo default so guides recorded without a file
-        // pick still upload cleanly — they just won't be eligible
+        // pick still save cleanly — they just won't be eligible
         // for the Phase 2 workspace-restoration flow on playback.
         let contextForAssembledGuide: GuideContext =
             capturedContextByEntryID[entryToProcess.id]
@@ -333,7 +339,7 @@ final class GuideUploadQueue: ObservableObject {
 
         let assembledGuide = ClickyGuide(
             version: "1.0",
-            id: "temp-will-be-overwritten-by-worker",
+            id: UUID().uuidString,
             title: defaultGuideTitleFromTranscript(transcriptionResult.transcriptText),
             author: GuideAuthor(
                 name: "Clicky user",
@@ -350,43 +356,44 @@ final class GuideUploadQueue: ObservableObject {
         )
 
         do {
-            let uploadResult = try await uploadAssembledGuideToR2(assembledGuide)
+            let savedFileURL: URL
+            if let repoRootURL = repoRootURLByEntryID[entryToProcess.id] {
+                savedFileURL = try saveAssembledGuideToRepo(assembledGuide, repoRootURL: repoRootURL)
+            } else {
+                savedFileURL = try saveAssembledGuideViaUserPicker(assembledGuide)
+            }
             updateEntryStatus(
                 entryID: entryToProcess.id,
                 newStatus: .completed(
-                    guideID: uploadResult.guideID,
-                    deepLinkString: uploadResult.deepLinkString,
-                    shareURLString: uploadResult.shareURLString
+                    savedFileURL: savedFileURL,
+                    guideTitle: assembledGuide.title
                 )
             )
-            ClickyAnalytics.trackGuideUploaded(
-                guideID: uploadResult.guideID,
+            ClickyAnalytics.trackGuideSaved(
+                filePath: savedFileURL.path,
                 stepCount: finishedStepsAccumulator.count
             )
-            // Log whichever of (share_url, deep_link) the worker
-            // actually returned so the dev output mirrors what the
-            // "Copy link" button will put on the clipboard.
-            let preferredLinkForLog = uploadResult.shareURLString ?? uploadResult.deepLinkString
             LogGuru.notice(
-                "GuideUploadQueue entry \(entryToProcess.id) uploaded as \(uploadResult.guideID) — \(preferredLinkForLog)",
+                "GuideUploadQueue entry \(entryToProcess.id) saved to \(savedFileURL.path)",
                 category: .guided,
                 privacy: .private
             )
         } catch {
             LogGuru.error(
-                "GuideUploadQueue upload failed for entry \(entryToProcess.id): \(error.localizedDescription)",
+                "GuideUploadQueue save failed for entry \(entryToProcess.id): \(error.localizedDescription)",
                 category: .guided,
                 privacy: .private
             )
-            updateEntryStatus(entryID: entryToProcess.id, newStatus: .failed(errorMessage: "upload failed: \(error.localizedDescription)"))
+            updateEntryStatus(entryID: entryToProcess.id, newStatus: .failed(errorMessage: "save failed: \(error.localizedDescription)"))
         }
 
         // Drop the heavy session payload after processing either way —
         // we keep the metadata in `pendingEntries` for UI but the
         // audio/screenshots and captured repo context are no longer
-        // needed once the uploaded guide has been assembled.
+        // needed once the guide has been saved.
         sessionPayloadByEntryID.removeValue(forKey: entryToProcess.id)
         capturedContextByEntryID.removeValue(forKey: entryToProcess.id)
+        repoRootURLByEntryID.removeValue(forKey: entryToProcess.id)
     }
 
     private func updateEntryStatus(entryID: UUID, newStatus: GuideUploadQueueEntry.Status) {
@@ -583,54 +590,62 @@ final class GuideUploadQueue: ObservableObject {
         return segmentedResults
     }
 
-    // MARK: - Upload
+    // MARK: - Local file save
 
-    /// Result of a successful `POST /guide/upload` call. `shareURLString`
-    /// is optional because older worker deploys only return
-    /// `{ guide_id, deep_link }` — we fall back to the deep link when
-    /// the share URL is missing so mixed-version clients still work.
-    private struct R2UploadResult {
-        let guideID: String
-        let deepLinkString: String
-        let shareURLString: String?
+    /// Writes the assembled guide as pretty-printed JSON into the
+    /// repo's `.clicky/` directory: `<repoRoot>/.clicky/<title>-<id>.clicky.json`.
+    /// Creates the `.clicky/` directory if it doesn't exist yet.
+    private func saveAssembledGuideToRepo(_ assembledGuide: ClickyGuide, repoRootURL: URL) throws -> URL {
+        let clickyDirectoryURL = repoRootURL.appendingPathComponent(".clicky", isDirectory: true)
+        try FileManager.default.createDirectory(at: clickyDirectoryURL, withIntermediateDirectories: true)
+
+        let sanitizedTitle = sanitizeForFilename(assembledGuide.title)
+        let shortID = String(assembledGuide.id.prefix(8))
+        let fileName = "\(sanitizedTitle)-\(shortID).clicky.json"
+        let fileURL = clickyDirectoryURL.appendingPathComponent(fileName)
+
+        let prettyEncoder = JSONEncoder()
+        prettyEncoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+        prettyEncoder.dateEncodingStrategy = .iso8601
+        let jsonData = try prettyEncoder.encode(assembledGuide)
+        try jsonData.write(to: fileURL)
+
+        return fileURL
     }
 
-    /// POSTs the assembled guide to the Worker's `/guide/upload`
-    /// endpoint, which stores it in R2 and returns a random id,
-    /// a `clicky://guide?id=...` deep link, and (from the codebase
-    /// distribution v1 worker onward) a universal `share_url`.
-    private func uploadAssembledGuideToR2(_ assembledGuide: ClickyGuide) async throws -> R2UploadResult {
-        let uploadURL = URL(string: "\(CompanionManager.workerBaseURL)/guide/upload")!
-        var uploadRequest = URLRequest(url: uploadURL)
-        uploadRequest.httpMethod = "POST"
-        uploadRequest.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        uploadRequest.timeoutInterval = 60
-        uploadRequest.httpBody = try assembledGuide.encodeToJSONData()
+    /// Shows an NSSavePanel so the author can pick where to save the
+    /// guide when no repo root is available.
+    private func saveAssembledGuideViaUserPicker(_ assembledGuide: ClickyGuide) throws -> URL {
+        let savePanel = NSSavePanel()
+        savePanel.title = "Save walkthrough guide"
+        savePanel.nameFieldStringValue = "\(sanitizeForFilename(assembledGuide.title)).clicky.json"
+        savePanel.allowedContentTypes = [.json]
+        savePanel.canCreateDirectories = true
 
-        let (uploadResponseData, uploadResponseObject) = try await URLSession.shared.data(for: uploadRequest)
-        guard let uploadHTTPResponse = uploadResponseObject as? HTTPURLResponse,
-              (200...299).contains(uploadHTTPResponse.statusCode) else {
-            let errorBodyString = String(data: uploadResponseData, encoding: .utf8) ?? "<unreadable>"
-            throw NSError(domain: "GuideUploadQueue", code: -20,
-                          userInfo: [NSLocalizedDescriptionKey: "guide upload failed: \(errorBodyString.prefix(300))"])
+        NSApp.activate(ignoringOtherApps: true)
+        guard savePanel.runModal() == .OK, let chosenURL = savePanel.url else {
+            throw NSError(domain: "GuideUploadQueue", code: -30,
+                          userInfo: [NSLocalizedDescriptionKey: "author cancelled save panel"])
         }
 
-        guard let uploadParsedJSON = try? JSONSerialization.jsonObject(with: uploadResponseData) as? [String: Any],
-              let returnedGuideID = uploadParsedJSON["guide_id"] as? String,
-              let returnedDeepLinkString = uploadParsedJSON["deep_link"] as? String else {
-            throw NSError(domain: "GuideUploadQueue", code: -21,
-                          userInfo: [NSLocalizedDescriptionKey: "guide upload response missing guide_id/deep_link"])
-        }
+        let prettyEncoder = JSONEncoder()
+        prettyEncoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+        prettyEncoder.dateEncodingStrategy = .iso8601
+        let jsonData = try prettyEncoder.encode(assembledGuide)
+        try jsonData.write(to: chosenURL)
 
-        // `share_url` is best-effort: we read it if present but don't
-        // fail the upload when an older worker build omits it.
-        let returnedShareURLString = uploadParsedJSON["share_url"] as? String
+        return chosenURL
+    }
 
-        return R2UploadResult(
-            guideID: returnedGuideID,
-            deepLinkString: returnedDeepLinkString,
-            shareURLString: returnedShareURLString
-        )
+    /// Lowercases the input, replaces non-alphanumeric runs with a
+    /// single dash, and truncates to 50 characters for safe filenames.
+    private func sanitizeForFilename(_ rawTitle: String) -> String {
+        let lowercased = rawTitle.lowercased()
+        let sanitized = lowercased
+            .components(separatedBy: CharacterSet.alphanumerics.inverted)
+            .filter { !$0.isEmpty }
+            .joined(separator: "-")
+        return String(sanitized.prefix(50))
     }
 
     // MARK: - Title helper
